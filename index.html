@@ -1,0 +1,660 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+<title>Fazil Carrom</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; touch-action:none; user-select:none; }
+  body {
+    background-color: #1a1a1a; /* Dark background to make the board pop */
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    display: flex; flex-direction: column; align-items: center; min-height: 100vh;
+    color: #fff; overflow: hidden;
+  }
+
+  .header { text-align: center; margin-top: 15px; margin-bottom: 10px; }
+  .header h1 { font-size: 24px; font-weight: 800; margin-bottom: 5px; color: #f1c40f; }
+  
+  .menu-buttons { display: flex; gap: 8px; justify-content: center; margin-bottom: 10px; }
+  .btn {
+    background: rgba(255,255,255,0.15); border: none; color: #fff;
+    padding: 6px 12px; border-radius: 6px; font-size: 13px; font-weight: 600;
+    cursor: pointer;
+  }
+  .btn:active { background: rgba(255,255,255,0.3); }
+
+  /* Game Area - Now includes the board frame */
+  #game-container {
+    position: relative; width: 95vw; max-width: 500px; aspect-ratio: 1 / 1;
+    background: #111; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.8);
+    overflow: hidden; margin-bottom: 15px;
+    border: 8px solid #2a2a2a;
+  }
+  canvas { width: 100%; height: 100%; display: block; }
+
+  .slider-container {
+    width: 90%; max-width: 450px; display: flex; align-items: center; gap: 10px;
+    margin-bottom: 10px;
+  }
+  input[type=range] {
+    flex: 1; -webkit-appearance: none; background: transparent;
+  }
+  input[type=range]::-webkit-slider-runnable-track {
+    width: 100%; height: 8px; background: #444; border-radius: 4px;
+  }
+  input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none; height: 20px; width: 20px; border-radius: 50%;
+    background: #f1c40f; margin-top: -6px; box-shadow: 0 2px 4px rgba(0,0,0,0.5);
+  }
+
+  #status {
+    font-size: 15px; font-weight: 600; margin-bottom: 15px; text-align: center;
+  }
+
+  #pass-screen {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.95); z-index: 100;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    padding: 20px; text-align: center;
+  }
+  #pass-screen h2 { font-size: 28px; margin-bottom: 10px; color: #f1c40f; }
+  #pass-screen p { color: #aaa; margin-bottom: 30px; }
+  #pass-screen button {
+    background: #e74c3c; color: white; border: none; padding: 15px 40px;
+    font-size: 20px; font-weight: bold; border-radius: 10px; cursor: pointer;
+  }
+
+  #aim-controls {
+    position: absolute; bottom: 15px; left: 0; right: 0;
+    display: flex; flex-direction: column; align-items: center;
+    pointer-events: none; opacity: 0; transition: opacity 0.2s;
+  }
+  #aim-controls.active { opacity: 1; pointer-events: auto; }
+  .shoot-btn {
+    background: #e74c3c; color: white; border: none; padding: 12px 40px;
+    border-radius: 25px; font-size: 18px; font-weight: bold;
+    box-shadow: 0 4px 15px rgba(231, 76, 60, 0.5); cursor: pointer;
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>Fazil Carrom</h1>
+  <div class="menu-buttons">
+    <button class="btn" onclick="resetGame()">Restart</button>
+  </div>
+</div>
+
+<div id="game-container">
+  <canvas id="gameCanvas"></canvas>
+  
+  <div id="aim-controls">
+    <div class="shoot-btn" id="shootBtn">SHOOT</div>
+  </div>
+</div>
+
+<div class="slider-container">
+  <span>Power</span>
+  <input type="range" id="powerSlider" min="0" max="100" value="0">
+</div>
+
+<div id="status">Turn: Player 1 (White)</div>
+
+<div id="pass-screen">
+  <h2 id="pass-title">Player 1's Turn</h2>
+  <p>Pass the device to the other player</p>
+  <button id="start-btn">I'm Ready</button>
+</div>
+
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+
+// Board Dimensions
+const SIZE = 600; 
+canvas.width = SIZE;
+canvas.height = SIZE;
+
+// Realistic Proportions based on your photo
+const FRAME_WIDTH = 25; // The black border
+const BOARD_PADDING = FRAME_WIDTH + 10;
+const BOARD_SIZE = SIZE - BOARD_PADDING * 2;
+const POCKET_R = 24; // Blue pockets
+const BASE_CIRCLE_R = 18; // Red bases
+const PUCK_R = 15;
+const STRIKER_R = 18;
+
+const FRICTION = 0.985; 
+const RESTITUTION = 0.65; 
+
+let gameState = {
+  turn: 0, 
+  phase: 'pass', 
+  scores: { white: 0, black: 0 },
+  pieces: [],
+  striker: null,
+  aiming: false,
+  aimAngle: 0,
+  power: 0,
+  isMoving: false
+};
+
+// Corners (Adjusted to fit the blue pockets)
+const pocketPos = [
+  { x: BOARD_PADDING + POCKET_R - 4, y: BOARD_PADDING + POCKET_R - 4 },
+  { x: SIZE - BOARD_PADDING - POCKET_R + 4, y: BOARD_PADDING + POCKET_R - 4 },
+  { x: BOARD_PADDING + POCKET_R - 4, y: SIZE - BOARD_PADDING - POCKET_R + 4 },
+  { x: SIZE - BOARD_PADDING - POCKET_R + 4, y: SIZE - BOARD_PADDING - POCKET_R + 4 }
+];
+
+function createPiece(x, y, type, color) {
+  return {
+    x, y,
+    vx: 0, vy: 0,
+    radius: type === 'striker' ? STRIKER_R : PUCK_R,
+    type: type,
+    color: color,
+    active: true
+  };
+}
+
+function initPieces() {
+  gameState.pieces = [];
+  
+  // Queen
+  gameState.pieces.push(createPiece(SIZE/2, SIZE/2, 'puck', 'queen'));
+
+  // Inner Ring (6 pucks) - Alternating
+  const innerDist = PUCK_R * 2.05;
+  for (let i = 0; i < 6; i++) {
+    const angle = (i * Math.PI / 3) + (Math.PI / 6);
+    gameState.pieces.push(createPiece(
+      SIZE/2 + Math.cos(angle) * innerDist,
+      SIZE/2 + Math.sin(angle) * innerDist,
+      'puck',
+      i % 2 === 0 ? 'white' : 'black'
+    ));
+  }
+
+  // Outer Ring (12 pucks) - Alternating
+  const outerDist = PUCK_R * 3.8;
+  for (let i = 0; i < 12; i++) {
+    const angle = i * Math.PI / 6;
+    gameState.pieces.push(createPiece(
+      SIZE/2 + Math.cos(angle) * outerDist,
+      SIZE/2 + Math.sin(angle) * outerDist,
+      'puck',
+      i % 2 === 0 ? 'white' : 'black'
+    ));
+  }
+
+  gameState.striker = createPiece(SIZE/2, 0, 'striker', 'striker');
+  gameState.pieces.push(gameState.striker);
+  
+  resetStrikerPosition();
+}
+
+function resetStrikerPosition() {
+  const st = gameState.striker;
+  st.vx = 0; st.vy = 0;
+  st.active = true;
+  
+  // Place striker on the baseline
+  if (gameState.turn === 0) {
+    st.x = SIZE / 2;
+    st.y = SIZE - BOARD_PADDING - 55;
+  } else {
+    st.x = SIZE / 2;
+    st.y = BOARD_PADDING + 55;
+  }
+}
+
+// ==========================================
+// ADVANCED 2D DRAWING (The realistic look)
+// ==========================================
+
+function drawBoard() {
+  // 1. Black Frame
+  ctx.fillStyle = '#111';
+  ctx.fillRect(0, 0, SIZE, SIZE);
+  
+  // 2. Wooden Surface Base
+  ctx.fillStyle = '#f4e3c5'; // Light wood
+  ctx.fillRect(BOARD_PADDING, BOARD_PADDING, BOARD_SIZE, BOARD_SIZE);
+
+  // Wood Grain Lines
+  ctx.strokeStyle = 'rgba(200, 170, 130, 0.3)';
+  ctx.lineWidth = 3;
+  for(let i=0; i<30; i++) {
+    ctx.beginPath();
+    ctx.moveTo(BOARD_PADDING, BOARD_PADDING + i*20);
+    ctx.bezierCurveTo(SIZE/3, BOARD_PADDING + i*20 + 10, SIZE/2, BOARD_PADDING + i*20 - 10, SIZE-BOARD_PADDING, BOARD_PADDING + i*20 + 5);
+    ctx.stroke();
+  }
+
+  // 3. Outer Black Lines
+  const lineOffset = 45;
+  ctx.strokeStyle = '#000';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(BOARD_PADDING + lineOffset, BOARD_PADDING + lineOffset, BOARD_SIZE - lineOffset*2, BOARD_SIZE - lineOffset*2);
+
+  // 4. Red Base Lines (Top, Bottom, Left, Right)
+  const baseDist = 35;
+  ctx.strokeStyle = '#c0392b';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  // Top
+  ctx.moveTo(BOARD_PADDING + lineOffset, BOARD_PADDING + baseDist); ctx.lineTo(SIZE - BOARD_PADDING - lineOffset, BOARD_PADDING + baseDist);
+  // Bottom
+  ctx.moveTo(BOARD_PADDING + lineOffset, SIZE - BOARD_PADDING - baseDist); ctx.lineTo(SIZE - BOARD_PADDING - lineOffset, SIZE - BOARD_PADDING - baseDist);
+  // Left
+  ctx.moveTo(BOARD_PADDING + baseDist, BOARD_PADDING + lineOffset); ctx.lineTo(BOARD_PADDING + baseDist, SIZE - BOARD_PADDING - lineOffset);
+  // Right
+  ctx.moveTo(SIZE - BOARD_PADDING - baseDist, BOARD_PADDING + lineOffset); ctx.lineTo(SIZE - BOARD_PADDING - baseDist, SIZE - BOARD_PADDING - lineOffset);
+  ctx.stroke();
+
+  // 5. Draw Red Circles on the Base Lines
+  const redCircles = [
+    {x: BOARD_PADDING + baseDist, y: BOARD_PADDING + lineOffset},
+    {x: SIZE - BOARD_PADDING - baseDist, y: BOARD_PADDING + lineOffset},
+    {x: BOARD_PADDING + baseDist, y: SIZE - BOARD_PADDING - lineOffset},
+    {x: SIZE - BOARD_PADDING - baseDist, y: SIZE - BOARD_PADDING - lineOffset},
+    {x: BOARD_PADDING + lineOffset, y: BOARD_PADDING + baseDist},
+    {x: SIZE - BOARD_PADDING - lineOffset, y: BOARD_PADDING + baseDist},
+    {x: BOARD_PADDING + lineOffset, y: SIZE - BOARD_PADDING - baseDist},
+    {x: SIZE - BOARD_PADDING - lineOffset, y: SIZE - BOARD_PADDING - baseDist}
+  ];
+  redCircles.forEach(c => {
+    ctx.beginPath();
+    ctx.arc(c.x, c.y, 6, 0, Math.PI * 2);
+    ctx.fillStyle = '#900'; // Dark red base circle
+    ctx.fill();
+    ctx.strokeStyle = '#000';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  });
+
+  // 6. Diagonal Arrows
+  ctx.strokeStyle = '#000';
+  ctx.lineWidth = 1.5;
+  function drawArrow(fromX, fromY, toX, toY) {
+    ctx.beginPath();
+    ctx.moveTo(fromX, fromY);
+    ctx.lineTo(toX, toY);
+    ctx.stroke();
+    // Arrow head
+    const angle = Math.atan2(toY - fromY, toX - fromX);
+    ctx.beginPath();
+    ctx.moveTo(toX, toY);
+    ctx.lineTo(toX - 10 * Math.cos(angle - Math.PI/6), toY - 10 * Math.sin(angle - Math.PI/6));
+    ctx.lineTo(toX - 10 * Math.cos(angle + Math.PI/6), toY - 10 * Math.sin(angle + Math.PI/6));
+    ctx.fillStyle = '#000';
+    ctx.fill();
+  }
+  // Top Left
+  drawArrow(BOARD_PADDING + 60, BOARD_PADDING + 60, BOARD_PADDING + 120, BOARD_PADDING + 120);
+  // Top Right
+  drawArrow(SIZE - BOARD_PADDING - 60, BOARD_PADDING + 60, SIZE - BOARD_PADDING - 120, BOARD_PADDING + 120);
+  // Bottom Left
+  drawArrow(BOARD_PADDING + 60, SIZE - BOARD_PADDING - 60, BOARD_PADDING + 120, SIZE - BOARD_PADDING - 120);
+  // Bottom Right
+  drawArrow(SIZE - BOARD_PADDING - 60, SIZE - BOARD_PADDING - 60, SIZE - BOARD_PADDING - 120, SIZE - BOARD_PADDING - 120);
+
+  // 7. Center Star Pattern
+  ctx.save();
+  ctx.translate(SIZE/2, SIZE/2);
+  ctx.strokeStyle = '#333';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(0, 0, PUCK_R * 3.5, 0, Math.PI * 2);
+  ctx.stroke();
+  
+  // Draw 8-point star
+  for(let i=0; i<8; i++) {
+    ctx.beginPath();
+    ctx.moveTo(0,0);
+    ctx.lineTo(0, -PUCK_R * 3.5);
+    ctx.stroke();
+    ctx.rotate(Math.PI/4);
+  }
+  ctx.restore();
+
+  // 8. Blue Pockets with Red Bases
+  pocketPos.forEach(p => {
+    // Red Base Circle
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, BASE_CIRCLE_R, 0, Math.PI * 2);
+    ctx.fillStyle = '#900';
+    ctx.fill();
+    
+    // Blue Pocket Hole
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, POCKET_R - 4, 0, Math.PI * 2);
+    ctx.fillStyle = '#3498db'; // Blue
+    ctx.fill();
+    // Inner shadow for depth
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, POCKET_R - 8, 0, Math.PI * 2);
+    ctx.fillStyle = '#111';
+    ctx.fill();
+  });
+}
+
+function drawPieces() {
+  for (let p of gameState.pieces) {
+    if (!p.active) continue;
+
+    // Draw shadow underneath the piece
+    ctx.beginPath();
+    ctx.arc(p.x + 3, p.y + 3, p.radius, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(0,0,0,0.3)';
+    ctx.fill();
+
+    // Main Body
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+
+    if (p.color === 'white') {
+      // Wooden/cream look
+      ctx.fillStyle = '#f5d79e';
+      ctx.fill();
+      ctx.strokeStyle = '#d4a373';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      // Inner ring
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.radius * 0.7, 0, Math.PI * 2);
+      ctx.strokeStyle = '#e6b87a';
+      ctx.stroke();
+      
+    } else if (p.color === 'black') {
+      // Glossy black look
+      ctx.fillStyle = '#111';
+      ctx.fill();
+      ctx.strokeStyle = '#444';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      // Inner rings (like the real pucks)
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.radius * 0.7, 0, Math.PI * 2);
+      ctx.strokeStyle = '#333';
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.radius * 0.4, 0, Math.PI * 2);
+      ctx.stroke();
+      
+    } else if (p.color === 'queen') {
+      // Red Queen
+      ctx.fillStyle = '#e74c3c';
+      ctx.fill();
+      ctx.strokeStyle = '#c0392b';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      // Inner rings
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.radius * 0.6, 0, Math.PI * 2);
+      ctx.strokeStyle = '#a93226';
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.radius * 0.3, 0, Math.PI * 2);
+      ctx.stroke();
+      
+    } else if (p.color === 'striker') {
+      // Aiming Line
+      if (gameState.phase === 'aim' || gameState.aiming) {
+        ctx.save();
+        ctx.translate(p.x, p.y);
+        ctx.rotate(gameState.aimAngle);
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.lineTo(0, -300);
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.6)';
+        ctx.setLineDash([8, 8]);
+        ctx.lineWidth = 3;
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      // Striker Body (Large, dark red with white details)
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+      ctx.fillStyle = '#641e16'; // Dark red/brown
+      ctx.fill();
+      ctx.strokeStyle = '#e74c3c'; // Red outer rim
+      ctx.lineWidth = 3;
+      ctx.stroke();
+      
+      // Inner white ring
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.radius * 0.6, 0, Math.PI * 2);
+      ctx.strokeStyle = '#ecf0f1';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      
+      // Center dot
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.radius * 0.2, 0, Math.PI * 2);
+      ctx.fillStyle = '#ecf0f1';
+      ctx.fill();
+    }
+  }
+}
+
+// ==========================================
+// PHYSICS & GAME LOGIC (Same as before)
+// ==========================================
+
+function resolveCollision(p1, p2) {
+  const dx = p2.x - p1.x;
+  const dy = p2.y - p1.y;
+  const dist = Math.hypot(dx, dy);
+  const minDist = p1.radius + p2.radius;
+
+  if (dist < minDist) {
+    const overlap = minDist - dist;
+    const nx = dx / dist;
+    const ny = dy / dist;
+
+    p1.x -= nx * overlap * 0.5;
+    p1.y -= ny * overlap * 0.5;
+    p2.x += nx * overlap * 0.5;
+    p2.y += ny * overlap * 0.5;
+
+    const rvx = p2.vx - p1.vx;
+    const rvy = p2.vy - p1.vy;
+    const velAlongNormal = rvx * nx + rvy * ny;
+
+    if (velAlongNormal > 0) return; 
+
+    let impulse = -(1 + RESTITUTION) * velAlongNormal;
+    impulse /= 2; 
+
+    p1.vx -= impulse * nx;
+    p1.vy -= impulse * ny;
+    p2.vx += impulse * nx;
+    p2.vy += impulse * ny;
+  }
+}
+
+function checkPockets(p) {
+  for (let pocket of pocketPos) {
+    const dist = Math.hypot(p.x - pocket.x, p.y - pocket.y);
+    if (dist < POCKET_R - 5) {
+      p.active = false;
+      p.vx = 0; p.vy = 0;
+      if (p.type !== 'striker' && p.color !== 'queen') {
+        gameState.scores[p.color]++;
+      }
+      break;
+    }
+  }
+}
+
+function updatePhysics() {
+  let moving = false;
+  const activePieces = gameState.pieces.filter(p => p.active);
+
+  for (let p of activePieces) {
+    p.x += p.vx;
+    p.y += p.vy;
+    p.vx *= FRICTION;
+    p.vy *= FRICTION;
+
+    if (Math.abs(p.vx) < 0.05) p.vx = 0;
+    if (Math.abs(p.vy) < 0.05) p.vy = 0;
+
+    if (p.vx !== 0 || p.vy !== 0) moving = true;
+
+    // Wall collisions (inside the black lines)
+    if (p.x - p.radius < BOARD_PADDING) { p.x = BOARD_PADDING + p.radius; p.vx *= -RESTITUTION; }
+    if (p.x + p.radius > SIZE - BOARD_PADDING) { p.x = SIZE - BOARD_PADDING - p.radius; p.vx *= -RESTITUTION; }
+    if (p.y - p.radius < BOARD_PADDING) { p.y = BOARD_PADDING + p.radius; p.vy *= -RESTITUTION; }
+    if (p.y + p.radius > SIZE - BOARD_PADDING) { p.y = SIZE - BOARD_PADDING - p.radius; p.vy *= -RESTITUTION; }
+
+    checkPockets(p);
+  }
+
+  for (let i = 0; i < activePieces.length; i++) {
+    for (let j = i + 1; j < activePieces.length; j++) {
+      resolveCollision(activePieces[i], activePieces[j]);
+    }
+  }
+
+  gameState.isMoving = moving;
+
+  if (!moving && gameState.phase === 'shooting') {
+    setTimeout(endTurn, 300);
+    gameState.phase = 'wait';
+  }
+}
+
+function render() {
+  drawBoard();
+  drawPieces();
+}
+
+const powerSlider = document.getElementById('powerSlider');
+const shootBtn = document.getElementById('shootBtn');
+const aimControls = document.getElementById('aim-controls');
+const statusText = document.getElementById('status');
+const passScreen = document.getElementById('pass-screen');
+const passTitle = document.getElementById('pass-title');
+const startBtn = document.getElementById('start-btn');
+
+canvas.addEventListener('pointerdown', (e) => {
+  if (gameState.phase !== 'aim' || gameState.isMoving) return;
+  
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+  const mouseX = (e.clientX - rect.left) * scaleX;
+  const mouseY = (e.clientY - rect.top) * scaleY;
+  
+  gameState.aiming = true;
+  updateAimAngle(mouseX, mouseY);
+});
+
+canvas.addEventListener('pointermove', (e) => {
+  if (!gameState.aiming) return;
+  
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+  const mouseX = (e.clientX - rect.left) * scaleX;
+  const mouseY = (e.clientY - rect.top) * scaleY;
+  
+  updateAimAngle(mouseX, mouseY);
+});
+
+canvas.addEventListener('pointerup', () => {
+  gameState.aiming = false;
+});
+
+function updateAimAngle(targetX, targetY) {
+  const st = gameState.striker;
+  const dx = targetX - st.x;
+  const dy = targetY - st.y;
+  
+  let angle = Math.atan2(dy, dx);
+  
+  // Restrict aiming backward
+  if (gameState.turn === 0 && dy > 0) angle = Math.PI; 
+  if (gameState.turn === 1 && dy < 0) angle = 0;
+
+  gameState.aimAngle = angle + Math.PI/2;
+  st.aimAngle = gameState.aimAngle;
+}
+
+shootBtn.addEventListener('click', () => {
+  if (gameState.phase !== 'aim' || gameState.isMoving) return;
+  
+  const power = parseInt(powerSlider.value) / 100;
+  if (power === 0) return;
+
+  const st = gameState.striker;
+  const speed = power * 40; 
+  
+  let angleRad = gameState.aimAngle - Math.PI/2;
+  st.vx = Math.cos(angleRad) * speed;
+  st.vy = Math.sin(angleRad) * speed;
+
+  gameState.phase = 'shooting';
+  aimControls.classList.remove('active');
+  powerSlider.value = 0;
+});
+
+function endTurn() {
+  if (!gameState.striker.active) {
+    if (gameState.turn === 0 && gameState.scores.white > 0) gameState.scores.white--;
+    if (gameState.turn === 1 && gameState.scores.black > 0) gameState.scores.black--;
+  }
+
+  gameState.turn = 1 - gameState.turn;
+  resetStrikerPosition();
+  
+  gameState.phase = 'pass';
+  passTitle.textContent = gameState.turn === 0 ? "Player 1's Turn (White)" : "Player 2's Turn (Black)";
+  passScreen.style.display = 'flex';
+  
+  updateUI();
+}
+
+startBtn.addEventListener('click', () => {
+  passScreen.style.display = 'none';
+  gameState.phase = 'aim';
+  aimControls.classList.add('active');
+  updateUI();
+});
+
+function updateUI() {
+  const tColor = gameState.turn === 0 ? "White" : "Black";
+  statusText.textContent = `P1 (White): ${gameState.scores.white} | P2 (Black): ${gameState.scores.black} | Turn: Player ${gameState.turn + 1} (${tColor})`;
+}
+
+function resetGame() {
+  gameState.turn = 0;
+  gameState.scores = { white: 0, black: 0 };
+  gameState.phase = 'pass';
+  initPieces();
+  updateUI();
+  
+  passTitle.textContent = "Player 1's Turn (White)";
+  passScreen.style.display = 'flex';
+  aimControls.classList.remove('active');
+}
+
+function gameLoop() {
+  updatePhysics();
+  render();
+  requestAnimationFrame(gameLoop);
+}
+
+initPieces();
+updateUI();
+gameLoop();
+passScreen.style.display = 'flex';
+
+</script>
+</body>
+</html>
