@@ -1,0 +1,580 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+<title>Fazil Carrom</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; touch-action:none; user-select:none; }
+  body {
+    background-color: #2b1b3d; /* Dark purple background like the screenshot */
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    display: flex; flex-direction: column; align-items: center; min-height: 100vh;
+    color: #fff; overflow: hidden;
+  }
+
+  /* Top UI */
+  .header { text-align: center; margin-top: 20px; margin-bottom: 10px; }
+  .header h1 { font-size: 24px; font-weight: 800; margin-bottom: 8px; }
+  .header p { font-size: 14px; color: #ccc; margin-bottom: 12px; }
+  
+  .menu-buttons { display: flex; gap: 8px; justify-content: center; margin-bottom: 10px; }
+  .btn {
+    background: rgba(255,255,255,0.15); border: none; color: #fff;
+    padding: 6px 12px; border-radius: 6px; font-size: 13px; font-weight: 600;
+    cursor: pointer;
+  }
+  .btn:active { background: rgba(255,255,255,0.3); }
+
+  /* Game Area */
+  #game-container {
+    position: relative; width: 95vw; max-width: 500px; aspect-ratio: 1 / 1;
+    background: #e8d5a7; border-radius: 8px; box-shadow: 0 10px 30px rgba(0,0,0,0.6);
+    overflow: hidden; margin-bottom: 15px;
+  }
+  canvas { width: 100%; height: 100%; display: block; }
+
+  /* Power Slider */
+  .slider-container {
+    width: 90%; max-width: 450px; display: flex; align-items: center; gap: 10px;
+    margin-bottom: 10px;
+  }
+  input[type=range] {
+    flex: 1; -webkit-appearance: none; background: transparent;
+  }
+  input[type=range]::-webkit-slider-runnable-track {
+    width: 100%; height: 8px; background: #5b4b76; border-radius: 4px;
+  }
+  input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none; height: 20px; width: 20px; border-radius: 50%;
+    background: #fff; margin-top: -6px; box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+  }
+
+  /* Status Text */
+  #status {
+    font-size: 15px; font-weight: 600; margin-bottom: 15px; text-align: center;
+  }
+
+  /* Pass Device Overlay */
+  #pass-screen {
+    position: fixed; inset: 0; background: rgba(43,27,61,0.95); z-index: 100;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    padding: 20px; text-align: center;
+  }
+  #pass-screen h2 { font-size: 28px; margin-bottom: 10px; }
+  #pass-screen p { color: #aaa; margin-bottom: 30px; }
+  #pass-screen button {
+    background: #4caf50; color: white; border: none; padding: 15px 40px;
+    font-size: 20px; font-weight: bold; border-radius: 10px; cursor: pointer;
+  }
+
+  /* Aiming Controls Overlay */
+  #aim-controls {
+    position: absolute; bottom: 10px; left: 0; right: 0;
+    display: flex; flex-direction: column; align-items: center;
+    pointer-events: none; opacity: 0; transition: opacity 0.2s;
+  }
+  #aim-controls.active { opacity: 1; pointer-events: auto; }
+  .shoot-btn {
+    background: #ff4757; color: white; border: none; padding: 10px 30px;
+    border-radius: 20px; font-size: 16px; font-weight: bold; margin-top: 10px;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.5); cursor: pointer;
+  }
+
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>Fazil Carrom</h1>
+  <p>Local Multiplayer Match</p>
+  <div class="menu-buttons">
+    <button class="btn" onclick="resetGame()">Restart</button>
+    <button class="btn">Sound: ON</button>
+  </div>
+</div>
+
+<div id="game-container">
+  <canvas id="gameCanvas"></canvas>
+  
+  <!-- In-game controls that show up when aiming -->
+  <div id="aim-controls">
+    <div class="shoot-btn" id="shootBtn">SHOOT</div>
+  </div>
+</div>
+
+<div class="slider-container">
+  <span>Power</span>
+  <input type="range" id="powerSlider" min="0" max="100" value="0">
+</div>
+
+<div id="status">Target 210 | Turn: Player 1 (White)</div>
+
+<div id="pass-screen">
+  <h2 id="pass-title">Player 1's Turn</h2>
+  <p>Pass the device to the other player</p>
+  <button id="start-btn">I'm Ready</button>
+</div>
+
+<script>
+// ==========================================
+// FAZIL CARROM - 2D TOP-DOWN ENGINE
+// ==========================================
+
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+
+// Sizing for crisp graphics on retina screens
+const SIZE = 600; 
+canvas.width = SIZE;
+canvas.height = SIZE;
+
+// Constants based on the 600x600 canvas
+const BOARD_PADDING = 20;
+const BOARD_SIZE = SIZE - BOARD_PADDING * 2;
+const POCKET_R = 22;
+const PUCK_R = 14;
+const STRIKER_R = 17;
+
+// Physics settings
+const FRICTION = 0.985; // How fast pieces stop
+const RESTITUTION = 0.7; // Bounciness
+
+// Game State
+let gameState = {
+  turn: 0, // 0 = White (P1), 1 = Black (P2)
+  phase: 'aim', // 'aim', 'shooting', 'pass'
+  scores: { white: 0, black: 0 },
+  pieces: [],
+  striker: null,
+  aiming: false,
+  aimAngle: 0,
+  power: 0,
+  isMoving: false
+};
+
+// Pocket positions
+const pockets = [
+  { x: BOARD_PADDING + POCKET_R, y: BOARD_PADDING + POCKET_R },
+  { x: SIZE - BOARD_PADDING - POCKET_R, y: BOARD_PADDING + POCKET_R },
+  { x: BOARD_PADDING + POCKET_R, y: SIZE - BOARD_PADDING - POCKET_R },
+  { x: SIZE - BOARD_PADDING - POCKET_R, y: SIZE - BOARD_PADDING - POCKET_R }
+];
+
+// Create a circular puck object
+function createPiece(x, y, type, color) {
+  return {
+    x, y,
+    vx: 0, vy: 0,
+    radius: type === 'striker' ? STRIKER_R : PUCK_R,
+    type: type,
+    color: color,
+    active: true
+  };
+}
+
+function initPieces() {
+  gameState.pieces = [];
+  
+  // Queen
+  gameState.pieces.push(createPiece(SIZE/2, SIZE/2, 'puck', 'queen'));
+
+  // Inner Ring (6 pucks)
+  const innerDist = PUCK_R * 2.1;
+  for (let i = 0; i < 6; i++) {
+    const angle = (i * Math.PI / 3) + (Math.PI / 6);
+    gameState.pieces.push(createPiece(
+      SIZE/2 + Math.cos(angle) * innerDist,
+      SIZE/2 + Math.sin(angle) * innerDist,
+      'puck',
+      i % 2 === 0 ? 'white' : 'black'
+    ));
+  }
+
+  // Outer Ring (12 pucks)
+  const outerDist = PUCK_R * 3.8;
+  for (let i = 0; i < 12; i++) {
+    const angle = i * Math.PI / 6;
+    gameState.pieces.push(createPiece(
+      SIZE/2 + Math.cos(angle) * outerDist,
+      SIZE/2 + Math.sin(angle) * outerDist,
+      'puck',
+      i % 2 === 0 ? 'white' : 'black'
+    ));
+  }
+
+  // Striker (Will be positioned based on turn)
+  gameState.striker = createPiece(SIZE/2, 0, 'striker', 'striker');
+  gameState.pieces.push(gameState.striker);
+  
+  resetStrikerPosition();
+}
+
+function resetStrikerPosition() {
+  const st = gameState.striker;
+  st.vx = 0; st.vy = 0;
+  st.active = true;
+  
+  if (gameState.turn === 0) {
+    // Player 1 (Bottom)
+    st.x = SIZE / 2;
+    st.y = SIZE - BOARD_PADDING - 50;
+  } else {
+    // Player 2 (Top)
+    st.x = SIZE / 2;
+    st.y = BOARD_PADDING + 50;
+  }
+}
+
+// ==========================================
+// PHYSICS & COLLISION
+// ==========================================
+
+function resolveCollision(p1, p2) {
+  const dx = p2.x - p1.x;
+  const dy = p2.y - p1.y;
+  const dist = Math.hypot(dx, dy);
+  const minDist = p1.radius + p2.radius;
+
+  if (dist < minDist) {
+    // Push apart
+    const overlap = minDist - dist;
+    const nx = dx / dist;
+    const ny = dy / dist;
+
+    p1.x -= nx * overlap * 0.5;
+    p1.y -= ny * overlap * 0.5;
+    p2.x += nx * overlap * 0.5;
+    p2.y += ny * overlap * 0.5;
+
+    // Relative velocity
+    const rvx = p2.vx - p1.vx;
+    const rvy = p2.vy - p1.vy;
+
+    // Velocity along normal
+    const velAlongNormal = rvx * nx + rvy * ny;
+
+    if (velAlongNormal > 0) return; // Moving apart
+
+    // Impulse scalar
+    let impulse = -(1 + RESTITUTION) * velAlongNormal;
+    impulse /= 2; // Assuming equal mass for simplicity
+
+    // Apply impulse
+    p1.vx -= impulse * nx;
+    p1.vy -= impulse * ny;
+    p2.vx += impulse * nx;
+    p2.vy += impulse * ny;
+  }
+}
+
+function checkPockets(p) {
+  for (let pocket of pockets) {
+    const dist = Math.hypot(p.x - pocket.x, p.y - pocket.y);
+    if (dist < POCKET_R) {
+      p.active = false;
+      p.vx = 0; p.vy = 0;
+      
+      if (p.type !== 'striker' && p.color !== 'queen') {
+        gameState.scores[p.color]++;
+      }
+      break;
+    }
+  }
+}
+
+function updatePhysics() {
+  let moving = false;
+  const activePieces = gameState.pieces.filter(p => p.active);
+
+  // Move pieces
+  for (let p of activePieces) {
+    p.x += p.vx;
+    p.y += p.vy;
+    p.vx *= FRICTION;
+    p.vy *= FRICTION;
+
+    if (Math.abs(p.vx) < 0.05) p.vx = 0;
+    if (Math.abs(p.vy) < 0.05) p.vy = 0;
+
+    if (p.vx !== 0 || p.vy !== 0) moving = true;
+
+    // Wall collisions
+    if (p.x - p.radius < BOARD_PADDING) { p.x = BOARD_PADDING + p.radius; p.vx *= -RESTITUTION; }
+    if (p.x + p.radius > SIZE - BOARD_PADDING) { p.x = SIZE - BOARD_PADDING - p.radius; p.vx *= -RESTITUTION; }
+    if (p.y - p.radius < BOARD_PADDING) { p.y = BOARD_PADDING + p.radius; p.vy *= -RESTITUTION; }
+    if (p.y + p.radius > SIZE - BOARD_PADDING) { p.y = SIZE - BOARD_PADDING - p.radius; p.vy *= -RESTITUTION; }
+
+    checkPockets(p);
+  }
+
+  // Collisions between pieces
+  for (let i = 0; i < activePieces.length; i++) {
+    for (let j = i + 1; j < activePieces.length; j++) {
+      resolveCollision(activePieces[i], activePieces[j]);
+    }
+  }
+
+  gameState.isMoving = moving;
+
+  // If it was moving and just stopped
+  if (!moving && gameState.phase === 'shooting') {
+    setTimeout(endTurn, 200); // Small delay before next turn
+    gameState.phase = 'wait';
+  }
+}
+
+// ==========================================
+// DRAWING
+// ==========================================
+
+function drawBoard() {
+  // Wood Background
+  ctx.fillStyle = '#e8d5a7';
+  ctx.fillRect(0, 0, SIZE, SIZE);
+  
+  // Draw some wood lines for texture
+  ctx.strokeStyle = 'rgba(180, 150, 100, 0.2)';
+  ctx.lineWidth = 2;
+  for(let i=0; i<20; i++) {
+    ctx.beginPath();
+    ctx.moveTo(0, i*30 + Math.sin(i)*20);
+    ctx.bezierCurveTo(SIZE/3, i*30 + 50, SIZE/2, i*30 - 50, SIZE, i*30 + Math.cos(i)*20);
+    ctx.stroke();
+  }
+
+  // Draw Borders
+  ctx.strokeStyle = '#5a3a1e';
+  ctx.lineWidth = 6;
+  ctx.strokeRect(BOARD_PADDING, BOARD_PADDING, BOARD_SIZE, BOARD_SIZE);
+
+  // Draw Pockets
+  for (let p of pockets) {
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, POCKET_R, 0, Math.PI * 2);
+    ctx.fillStyle = '#111';
+    ctx.fill();
+    ctx.strokeStyle = '#3a2010';
+    ctx.lineWidth = 3;
+    ctx.stroke();
+  }
+
+  // Draw Center Circle
+  ctx.beginPath();
+  ctx.arc(SIZE/2, SIZE/2, PUCK_R * 5.5, 0, Math.PI * 2);
+  ctx.strokeStyle = '#5a3a1e';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+}
+
+function drawPieces() {
+  for (let p of gameState.pieces) {
+    if (!p.active) continue;
+
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+
+    if (p.color === 'white') {
+      ctx.fillStyle = '#fdfbf7';
+      ctx.fill();
+      ctx.strokeStyle = '#ccc';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    } else if (p.color === 'black') {
+      ctx.fillStyle = '#222';
+      ctx.fill();
+      ctx.strokeStyle = '#555';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    } else if (p.color === 'queen') {
+      ctx.fillStyle = '#c0392b';
+      ctx.fill();
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    } else if (p.color === 'striker') {
+      // Draw aim line for striker
+      if (gameState.phase === 'aim' || gameState.aiming) {
+        ctx.save();
+        ctx.translate(p.x, p.y);
+        ctx.rotate(gameState.aimAngle);
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.lineTo(0, -200); // Aiming line pointing up
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+        ctx.setLineDash([10, 10]);
+        ctx.lineWidth = 3;
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      // Draw Striker
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+      ctx.fillStyle = '#00d2d3';
+      ctx.fill();
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 3;
+      ctx.stroke();
+      
+      // Inner ring
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.radius * 0.6, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    }
+  }
+}
+
+function render() {
+  drawBoard();
+  drawPieces();
+}
+
+// ==========================================
+// GAME LOGIC & INPUT
+// ==========================================
+
+const powerSlider = document.getElementById('powerSlider');
+const shootBtn = document.getElementById('shootBtn');
+const aimControls = document.getElementById('aim-controls');
+const statusText = document.getElementById('status');
+const passScreen = document.getElementById('pass-screen');
+const passTitle = document.getElementById('pass-title');
+const startBtn = document.getElementById('start-btn');
+
+// Mouse/Touch aiming
+canvas.addEventListener('pointerdown', (e) => {
+  if (gameState.phase !== 'aim' || gameState.isMoving) return;
+  
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+  const mouseX = (e.clientX - rect.left) * scaleX;
+  const mouseY = (e.clientY - rect.top) * scaleY;
+  
+  gameState.aiming = true;
+  updateAimAngle(mouseX, mouseY);
+});
+
+canvas.addEventListener('pointermove', (e) => {
+  if (!gameState.aiming) return;
+  
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+  const mouseX = (e.clientX - rect.left) * scaleX;
+  const mouseY = (e.clientY - rect.top) * scaleY;
+  
+  updateAimAngle(mouseX, mouseY);
+});
+
+canvas.addEventListener('pointerup', () => {
+  gameState.aiming = false;
+});
+
+function updateAimAngle(targetX, targetY) {
+  const st = gameState.striker;
+  const dx = targetX - st.x;
+  const dy = targetY - st.y;
+  
+  // Calculate angle (pointing towards target)
+  let angle = Math.atan2(dy, dx);
+  
+  // If Player 1 (bottom), prevent aiming backwards (down)
+  if (gameState.turn === 0 && dy > 0) angle = Math.PI; 
+  // If Player 2 (top), prevent aiming backwards (up)
+  if (gameState.turn === 1 && dy < 0) angle = 0;
+
+  gameState.aimAngle = angle + Math.PI/2; // Adjust for visual line
+  st.aimAngle = gameState.aimAngle;
+}
+
+shootBtn.addEventListener('click', () => {
+  if (gameState.phase !== 'aim' || gameState.isMoving) return;
+  
+  const power = parseInt(powerSlider.value) / 100;
+  if (power === 0) return;
+
+  const st = gameState.striker;
+  const speed = power * 35; // Max speed
+  
+  // Aim angle calculation
+  let angleRad = gameState.aimAngle - Math.PI/2;
+  
+  // If player 1, shoot UP. If player 2, shoot DOWN.
+  // The aiming line handles direction, we just push it forward.
+  st.vx = Math.cos(angleRad) * speed;
+  st.vy = Math.sin(angleRad) * speed;
+
+  gameState.phase = 'shooting';
+  aimControls.classList.remove('active');
+  powerSlider.value = 0;
+});
+
+function endTurn() {
+  // Check for pocketed striker
+  if (!gameState.striker.active) {
+    // Foul: subtract point if possible
+    if (gameState.turn === 0 && gameState.scores.white > 0) gameState.scores.white--;
+    if (gameState.turn === 1 && gameState.scores.black > 0) gameState.scores.black--;
+  }
+
+  // Next turn
+  gameState.turn = 1 - gameState.turn;
+  
+  resetStrikerPosition();
+  
+  // Show Pass Screen
+  gameState.phase = 'pass';
+  passTitle.textContent = gameState.turn === 0 ? "Player 1's Turn (White)" : "Player 2's Turn (Black)";
+  passScreen.style.display = 'flex';
+  
+  updateUI();
+}
+
+startBtn.addEventListener('click', () => {
+  passScreen.style.display = 'none';
+  gameState.phase = 'aim';
+  aimControls.classList.add('active');
+  updateUI();
+});
+
+function updateUI() {
+  const tColor = gameState.turn === 0 ? "White" : "Black";
+  statusText.textContent = `Target 210 | P1 (White): ${gameState.scores.white} | P2 (Black): ${gameState.scores.black} | Turn: Player ${gameState.turn + 1} (${tColor})`;
+}
+
+function resetGame() {
+  gameState.turn = 0;
+  gameState.scores = { white: 0, black: 0 };
+  gameState.phase = 'pass';
+  initPieces();
+  updateUI();
+  
+  passTitle.textContent = "Player 1's Turn (White)";
+  passScreen.style.display = 'flex';
+  aimControls.classList.remove('active');
+}
+
+// ==========================================
+// MAIN LOOP
+// ==========================================
+function gameLoop() {
+  updatePhysics();
+  render();
+  requestAnimationFrame(gameLoop);
+}
+
+// Start
+initPieces();
+updateUI();
+gameLoop();
+
+// Initial setup screen
+passScreen.style.display = 'flex';
+
+</script>
+</body>
+</html>
